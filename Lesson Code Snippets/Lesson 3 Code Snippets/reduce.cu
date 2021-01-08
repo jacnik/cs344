@@ -20,12 +20,40 @@ __global__ void global_reduce_kernel(float * d_out, float * d_in)
     // only thread 0 writes result for this block back to global mem
     if (tid == 0)
     {
-        // TODO this returns wrong results
         d_out[blockIdx.x] = d_in[myId];
     }
 }
 
 __global__ void shmem_reduce_kernel(float * d_out, const float * d_in)
+{
+    // sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
+    extern __shared__ float sdata[];
+
+    int myId = threadIdx.x + blockDim.x * blockIdx.x;
+    int tid  = threadIdx.x;
+
+    // load shared mem from global mem
+    sdata[tid] = d_in[myId];
+    __syncthreads();            // make sure entire block is loaded!
+
+    // do reduction in shared mem
+    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
+    {
+        if (tid < s)
+        {
+            sdata[tid] += sdata[tid + s];
+        }
+        __syncthreads();        // make sure all adds at one stage are done!
+    }
+
+    // only thread 0 writes result for this block back to global mem
+    if (tid == 0)
+    {
+        d_out[blockIdx.x] = sdata[0];
+    }
+}
+
+__global__ void optimized_shmem_reduce_kernel(float * d_out, const float * d_in)
 {
     // sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
     extern __shared__ float sdata[];
@@ -102,14 +130,14 @@ void optimized_reduce(float * d_out, float * d_intermediate, float * d_in, int s
     int threads = maxThreadsPerBlock;
     int blocks = size / maxThreadsPerBlock;
 
-    shmem_reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
+    optimized_shmem_reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
        (d_intermediate, d_in);
 
     // now we're down to one block left, so reduce it
     threads = blocks; // launch one thread for each block in prev step
     blocks = 1;
 
-    shmem_reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
+    optimized_shmem_reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
 	    (d_out, d_intermediate);
 }
 
@@ -134,7 +162,6 @@ int main(int argc, char **argv)
                (int)devProps.clockRate);
     }
 
-    // const int ARRAY_SIZE = 1 << 20;
     const int ARRAY_SIZE = 1 << 20;
     const int ARRAY_BYTES = ARRAY_SIZE * sizeof(float);
 
@@ -143,8 +170,10 @@ int main(int argc, char **argv)
     float sum = 0.0f;
     for(int i = 0; i < ARRAY_SIZE; i++) {
         // generate random float in [-1.0f, 1.0f]
-        // TODO uncomment for random numbers
-        //h_in[i] = -1.0f + (float)random()/((float)RAND_MAX/2.0f);
+        // When using random() here the result is always -5.174542.
+        // This might be because of how bad this random generator is.
+        // I think that when generating 2^20 random numbers between [-1, 1] their sum should be around 0.
+        // h_in[i] = -1.0f + (float)random()/((float)RAND_MAX/2.0f);
         h_in[i] = 0.01f; // 0.01 * 2^20 = 10485.76
         sum += h_in[i];
     }
@@ -176,6 +205,15 @@ int main(int argc, char **argv)
         for (int i = 0; i < 100; i++)
         {
             reduce(d_out, d_intermediate, d_in, ARRAY_SIZE, false);
+
+            // global reduce will return wrong sum in this case
+            // is is because it will write the sum to the same memory adress 100 times
+            // to test that out uncomment below and have a look at the partial sums after each iteration
+            // only the first one is correct.
+            // But I don't know why each sum is not just double the previous one,
+            // float h_out;
+            // cudaMemcpy(&h_out, d_out, sizeof(float), cudaMemcpyDeviceToHost);
+            // printf("\tpartial sum: %f\n", h_out);
         }
         cudaEventRecord(stop, 0);
         break;
@@ -213,7 +251,7 @@ int main(int argc, char **argv)
     printf("average time elapsed: %f\n", elapsedTime);
 
     printf("\nResults:\n");
-    // printf("\tserial sum: %f [-5.174542 probaly means float overflow]\n", sum);
+    printf("\tserial sum: %f\n", sum);
     printf("\treduce sum: %f\n", h_out);
 
     // free GPU memory allocation
