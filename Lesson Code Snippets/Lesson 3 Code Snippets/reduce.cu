@@ -20,6 +20,7 @@ __global__ void global_reduce_kernel(float * d_out, float * d_in)
     // only thread 0 writes result for this block back to global mem
     if (tid == 0)
     {
+        // TODO this returns wrong results
         d_out[blockIdx.x] = d_in[myId];
     }
 }
@@ -53,7 +54,7 @@ __global__ void shmem_reduce_kernel(float * d_out, const float * d_in)
     }
 }
 
-void reduce(float * d_out, float * d_intermediate, float * d_in, 
+void reduce(float * d_out, float * d_intermediate, float * d_in,
             int size, bool usesSharedMemory)
 {
     // assumes that size is not greater than maxThreadsPerBlock^2
@@ -86,6 +87,32 @@ void reduce(float * d_out, float * d_intermediate, float * d_in,
     }
 }
 
+void optimized_reduce(float * d_out, float * d_intermediate, float * d_in, int size)
+{
+    // assumes that size is not greater than maxThreadsPerBlock^2
+    // and that size is a multiple of maxThreadsPerBlock
+    /**
+	Optimizations mentioned by the course instructor:
+	- Processing multiple items per thread, instead of just one
+	- Perform first step of the reduction right when you read the items from global to shared memory
+	- Take advantage of the fact that warps are synchronous when doing the last steps of the reduction
+    */
+
+    const int maxThreadsPerBlock = 1024;
+    int threads = maxThreadsPerBlock;
+    int blocks = size / maxThreadsPerBlock;
+
+    shmem_reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
+       (d_intermediate, d_in);
+
+    // now we're down to one block left, so reduce it
+    threads = blocks; // launch one thread for each block in prev step
+    blocks = 1;
+
+    shmem_reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
+	    (d_out, d_intermediate);
+}
+
 int main(int argc, char **argv)
 {
     int deviceCount;
@@ -102,11 +129,12 @@ int main(int argc, char **argv)
     {
         printf("Using device %d:\n", dev);
         printf("%s; global mem: %dB; compute v%d.%d; clock: %d kHz\n",
-               devProps.name, (int)devProps.totalGlobalMem, 
-               (int)devProps.major, (int)devProps.minor, 
+               devProps.name, (int)devProps.totalGlobalMem,
+               (int)devProps.major, (int)devProps.minor,
                (int)devProps.clockRate);
     }
 
+    // const int ARRAY_SIZE = 1 << 20;
     const int ARRAY_SIZE = 1 << 20;
     const int ARRAY_BYTES = ARRAY_SIZE * sizeof(float);
 
@@ -115,7 +143,9 @@ int main(int argc, char **argv)
     float sum = 0.0f;
     for(int i = 0; i < ARRAY_SIZE; i++) {
         // generate random float in [-1.0f, 1.0f]
-        h_in[i] = -1.0f + (float)random()/((float)RAND_MAX/2.0f);
+        // TODO uncomment for random numbers
+        //h_in[i] = -1.0f + (float)random()/((float)RAND_MAX/2.0f);
+        h_in[i] = 0.01f; // 0.01 * 2^20 = 10485.76
         sum += h_in[i];
     }
 
@@ -128,13 +158,13 @@ int main(int argc, char **argv)
     cudaMalloc((void **) &d_out, sizeof(float));
 
     // transfer the input array to the GPU
-    cudaMemcpy(d_in, h_in, ARRAY_BYTES, cudaMemcpyHostToDevice); 
+    cudaMemcpy(d_in, h_in, ARRAY_BYTES, cudaMemcpyHostToDevice);
 
     int whichKernel = 0;
     if (argc == 2) {
         whichKernel = atoi(argv[1]);
     }
-        
+
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -158,13 +188,22 @@ int main(int argc, char **argv)
         }
         cudaEventRecord(stop, 0);
         break;
+    case 2:
+        printf("Running optimized reduce with shared mem\n");
+        cudaEventRecord(start, 0);
+        for (int i = 0; i < 100; i++)
+        {
+            optimized_reduce(d_out, d_intermediate, d_in, ARRAY_SIZE);
+        }
+        cudaEventRecord(stop, 0);
+        break;
     default:
         fprintf(stderr, "error: ran no kernel\n");
         exit(EXIT_FAILURE);
     }
     cudaEventSynchronize(stop);
     float elapsedTime;
-    cudaEventElapsedTime(&elapsedTime, start, stop);    
+    cudaEventElapsedTime(&elapsedTime, start, stop);
     elapsedTime /= 100.0f;      // 100 trials
 
     // copy back the sum from GPU
@@ -173,10 +212,14 @@ int main(int argc, char **argv)
 
     printf("average time elapsed: %f\n", elapsedTime);
 
+    printf("\nResults:\n");
+    // printf("\tserial sum: %f [-5.174542 probaly means float overflow]\n", sum);
+    printf("\treduce sum: %f\n", h_out);
+
     // free GPU memory allocation
     cudaFree(d_in);
     cudaFree(d_intermediate);
     cudaFree(d_out);
-        
+
     return 0;
 }
