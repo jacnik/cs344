@@ -22,3 +22,14 @@ cmake ..
 make
 ```
 
+# Compiling and running snippets:
+```sh
+cd Lesson\ Code\ Snippets/Lesson\ 3\ Code\ Snippets
+
+# compile
+nvcc reduce.cu -o reduce.out
+
+# run
+./reduce.out 0 # 0 = reduce with global memory; 1 = reduce with shared memory
+
+```
