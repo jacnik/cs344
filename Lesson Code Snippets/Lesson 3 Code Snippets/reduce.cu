@@ -92,11 +92,10 @@ __global__ void optimized_shmem_reduce_kernel(float * d_out, const float * d_in)
     extern __shared__ float sdata[];
 
     int tid  = threadIdx.x;
-    int myId_1 = tid + blockDim.x * 2 * blockIdx.x;
-    int myId_2 = myId_1 + blockDim.x;
+    int myId = (tid + blockDim.x * blockIdx.x) * 2;
 
     // Perform first step of the reduction right when you read the items from global to shared memory
-    sdata[tid] = d_in[myId_1] + d_in[myId_2];
+    sdata[tid] = d_in[myId] + d_in[myId + 1];
     __syncthreads();            // make sure entire block is loaded!
 
     // do reduction in shared mem
@@ -353,8 +352,8 @@ int main(int argc, char **argv)
         // When using random() here the result is always -5.174542.
         // This might be because of how bad this random generator is.
         // I think that when generating 2^20 random numbers between [-1, 1] their sum should be around 0.
-        h_in[i] = -1.0f + (float)random()/((float)RAND_MAX/2.0f);
-        // h_in[i] = 0.01f; // 0.01 * 2^20 = 10485.76
+        // h_in[i] = -1.0f + (float)random()/((float)RAND_MAX/2.0f);
+        h_in[i] = 0.01f; // 0.01 * 2^20 = 10485.76
         sum += h_in[i];
     }
 
