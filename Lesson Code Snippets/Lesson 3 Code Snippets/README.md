@@ -7,7 +7,10 @@ nvcc reduce.cu -o reduce.out
 ./reduce.out 0 # 0 = reduce with global memory; 1 = reduce with shared memory
 ```
 
+
 ## Reduce algorithm
+[Nvidia article about parallel reduction](https://developer.download.nvidia.com/assets/cuda/files/reduction.pdf)
+
 ```
 array d_in:
  ___ ___ ___ ___ ___ ___ ___ ___ ___ ____ ____ ____ ____ ____ ____ ____
