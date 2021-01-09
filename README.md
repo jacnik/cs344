@@ -10,7 +10,7 @@ These instructions are for OS X 10.9 "Mavericks".
 * Step 1. Build and install OpenCV. The best way to do this is with
 Homebrew. However, you must slightly alter the Homebrew OpenCV
 installation; you must build it with libstdc++ (instead of the default
-libc++) so that it will properly link against the nVidia CUDA dev kit. 
+libc++) so that it will properly link against the nVidia CUDA dev kit.
 [This entry in the Udacity discussion forums](http://forums.udacity.com/questions/100132476/cuda-55-opencv-247-os-x-maverick-it-doesnt-work) describes exactly how to build a compatible OpenCV.
 
 * Step 2. You can now create 10.9-compatible makefiles, which will allow you to
@@ -20,16 +20,4 @@ mkdir build
 cd build
 cmake ..
 make
-```
-
-# Compiling and running snippets:
-```sh
-cd Lesson\ Code\ Snippets/Lesson\ 3\ Code\ Snippets
-
-# compile
-nvcc reduce.cu -o reduce.out
-
-# run
-./reduce.out 0 # 0 = reduce with global memory; 1 = reduce with shared memory
-
 ```
