@@ -157,6 +157,13 @@ void print_array(const int* arr, const int size)
 
 __global__ void test_kernel(int * d_out, const int * d_in)
 {
+    /**
+	Optimizations mentioned by the course instructor:
+	- Processing multiple items per thread, instead of just one
+	- Perform first step of the reduction right when you read the items from global to shared memory
+	- Take advantage of the fact that warps are synchronous when doing the last steps of the reduction
+    */
+
     // sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
     extern __shared__ int sdata[];
 
@@ -167,13 +174,13 @@ __global__ void test_kernel(int * d_out, const int * d_in)
 
     // printf("myId = %i, tid = %i\n", myId, tid);
 
-    if (myId == 4) {
-        printf("\n");
-        printf("threadIdx.x = %i\n", threadIdx.x);
-        printf("blockDim.x = %i\n", blockDim.x);
-        printf("blockIdx.x = %i\n", blockIdx.x);
-        printf("\n");
-    }
+    // if (myId == 4) {
+    //     printf("\n");
+    //     printf("threadIdx.x = %i\n", threadIdx.x);
+    //     printf("blockDim.x = %i\n", blockDim.x);
+    //     printf("blockIdx.x = %i\n", blockIdx.x);
+    //     printf("\n");
+    // }
 
     // load shared mem from global mem
     sdata[tid] = d_in[myId];
@@ -223,14 +230,7 @@ void test_reduce(int * d_out, int * d_intermediate, int * d_in, int size)
 {
     // assumes that size is not greater than maxThreadsPerBlock^2
     // and that size is a multiple of maxThreadsPerBlock
-    /**
-	Optimizations mentioned by the course instructor:
-	- Processing multiple items per thread, instead of just one
-	- Perform first step of the reduction right when you read the items from global to shared memory
-	- Take advantage of the fact that warps are synchronous when doing the last steps of the reduction
-    */
-
-    const int maxThreadsPerBlock = 4;
+    const int maxThreadsPerBlock = 8;
 
     int threads = maxThreadsPerBlock;
     int blocks = size / maxThreadsPerBlock;
@@ -271,7 +271,7 @@ int main(int argc, char **argv)
                (int)devProps.clockRate);
     }
 
-    const int ARRAY_SIZE = 16;
+    const int ARRAY_SIZE = 512;
     const int ARRAY_BYTES = ARRAY_SIZE * sizeof(int);
 
     // generate the input array on the host
