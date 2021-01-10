@@ -86,26 +86,47 @@ void reduce(float * d_out, float * d_intermediate, float * d_in,
     }
 }
 
+__device__ void warpReduce(volatile float* sdata, int tid)
+{
+    sdata[tid] += sdata[tid + 32];
+    sdata[tid] += sdata[tid + 16];
+    sdata[tid] += sdata[tid + 8];
+    sdata[tid] += sdata[tid + 4];
+    sdata[tid] += sdata[tid + 2];
+    sdata[tid] += sdata[tid + 1];
+}
+
 __global__ void optimized_shmem_reduce_kernel(float * d_out, const float * d_in)
 {
     // sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
     extern __shared__ float sdata[];
 
     int tid  = threadIdx.x;
-    int myId = (tid + blockDim.x * blockIdx.x) * 2;
+    int myId = 2 * (tid + blockDim.x * blockIdx.x);
 
     // Perform first step of the reduction right when you read the items from global to shared memory
     sdata[tid] = d_in[myId] + d_in[myId + 1];
     __syncthreads();            // make sure entire block is loaded!
 
     // do reduction in shared mem
-    for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
+    for (unsigned int s = blockDim.x / 2; s > 32; s >>= 1)
     {
+        /**
+        When s <= 32, there is only one warp left.
+        Since instructions are SIMD synchronous within a warp, when s <= 32:
+            - don’t need to __syncthreads()
+            - don’t need “if (tid < s)” because it doesn’t save any work
+        That is why we can unroll the last warp of this loop (when s <= 32), this is done in function warpReduce.
+        */
         if (tid < s)
         {
             sdata[tid] += sdata[tid + s];
         }
         __syncthreads();        // make sure all adds at one stage are done!
+    }
+
+    if (tid < 32) {
+        warpReduce(sdata, tid);
     }
 
     // only thread 0 writes result for this block back to global mem
@@ -130,7 +151,7 @@ void optimized_reduce(float * d_out, float * d_intermediate, float * d_in, int s
     const int maxThreadsPerBlock = 1024;
 
     int threads = maxThreadsPerBlock;
-    int blocks = size / (maxThreadsPerBlock * 2);
+    int blocks = size / maxThreadsPerBlock / 2;
 
     optimized_shmem_reduce_kernel<<<blocks, threads, threads * sizeof(float)>>>
        (d_intermediate, d_in);
@@ -143,182 +164,6 @@ void optimized_reduce(float * d_out, float * d_intermediate, float * d_in, int s
 	    (d_out, d_intermediate);
 }
 
-// __global__ void test_kernel(int * d_out, const int * d_in)
-// {
-//     /**
-// 	Optimizations mentioned by the course instructor:
-// 	- Processing multiple items per thread, instead of just one
-// 	- Perform first step of the reduction right when you read the items from global to shared memory
-// 	- Take advantage of the fact that warps are synchronous when doing the last steps of the reduction
-//     */
-
-//     // sdata is allocated in the kernel call: 3rd arg to <<<b, t, shmem>>>
-//     extern __shared__ int sdata[];
-
-//     int tid  = threadIdx.x;
-//     int myId_1 = tid + blockDim.x * 2 * blockIdx.x;
-//     int myId_2 = myId_1 + blockDim.x;
-
-//     // printf("myId = %i\n", myId);
-
-//     // printf("myId = %i, tid = %i\n", myId, tid);
-
-//     // if (myId == 4) {
-//     //     printf("\n");
-//     //     printf("threadIdx.x = %i\n", threadIdx.x);
-//     //     printf("blockDim.x = %i\n", blockDim.x);
-//     //     printf("blockIdx.x = %i\n", blockIdx.x);
-//     //     printf("\n");
-//     // }
-
-//     // Perform first step of the reduction right when you read the items from global to shared memory
-//     sdata[tid] = d_in[myId_1] + d_in[myId_2];
-//     __syncthreads();            // make sure entire block is loaded!
-
-//     // if (myId == 4) {
-//     //     for (int i = 0; i < blockDim.x; i++) {
-//     //         printf("%i ", sdata[i]);
-//     //     }
-//     //     printf("\n");
-//     // }
-
-//     // do reduction in shared mem
-//     for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1)
-//     {
-//         if (tid < s)
-//         {
-//             sdata[tid] += sdata[tid + s];
-//         }
-//         __syncthreads();        // make sure all adds at one stage are done!
-
-//         // if (myId == 4) {
-//         //     for (int i = 0; i < blockDim.x; i++) {
-//         //         printf("%i ", sdata[i]);
-//         //     }
-//         //     printf("\n");
-//         // }
-//     }
-
-//     // only thread 0 writes result for this block back to global mem
-//     if (tid == 0)
-//     {
-//         d_out[blockIdx.x] = sdata[0];
-//     }
-
-//     // __syncthreads();        // make sure all adds at one stage are done!
-
-//     // if (myId == 4) {
-//     //     for (int i = 0; i < blockDim.x; i++) {
-//     //         printf("%i ", d_out[i]);
-//     //     }
-//     //     printf("\n");
-//     // }
-// }
-
-// void test_reduce(int * d_out, int * d_intermediate, int * d_in, int size)
-// {
-//     // assumes that size is not greater than maxThreadsPerBlock^2
-//     // and that size is a multiple of maxThreadsPerBlock
-//     const int maxThreadsPerBlock = 8;
-
-//     int threads = maxThreadsPerBlock;
-//     int blocks = size / (maxThreadsPerBlock * 2);
-
-//     printf("threads = %i\n", threads);
-//     printf("blocks = %i\n", blocks);
-
-//     test_kernel<<<blocks, threads, threads * sizeof(int)>>>
-//        (d_intermediate, d_in);
-
-//     // now we're down to one block left, so reduce it
-//     threads = blocks; // launch one thread for each block in prev step
-//     blocks = 1;
-
-//     test_kernel<<<blocks, threads, threads * sizeof(int)>>>
-// 	    (d_out, d_intermediate);
-// }
-
-
-// int main(int argc, char **argv)
-// {
-//     int deviceCount;
-//     cudaGetDeviceCount(&deviceCount);
-//     if (deviceCount == 0) {
-//         fprintf(stderr, "error: no devices supporting CUDA.\n");
-//         exit(EXIT_FAILURE);
-//     }
-//     int dev = 0;
-//     cudaSetDevice(dev);
-
-//     cudaDeviceProp devProps;
-//     if (cudaGetDeviceProperties(&devProps, dev) == 0)
-//     {
-//         printf("Using device %d:\n", dev);
-//         printf("%s; global mem: %dB; compute v%d.%d; clock: %d kHz\n",
-//                devProps.name, (int)devProps.totalGlobalMem,
-//                (int)devProps.major, (int)devProps.minor,
-//                (int)devProps.clockRate);
-//     }
-
-//     const int ARRAY_SIZE = 512;
-//     const int ARRAY_BYTES = ARRAY_SIZE * sizeof(int);
-
-//     // generate the input array on the host
-//     int h_in[ARRAY_SIZE];
-//     int sum = 0;
-//     for(int i = 0; i < ARRAY_SIZE; i++) {
-//         h_in[i] = i + 1;
-//         sum += h_in[i];
-//     }
-
-//     // print_array(h_in, ARRAY_SIZE);
-
-//     // declare GPU memory pointers
-//     int * d_in, * d_intermediate, * d_out;
-
-//     // allocate GPU memory
-//     cudaMalloc((void **) &d_in, ARRAY_BYTES);
-//     cudaMalloc((void **) &d_intermediate, ARRAY_BYTES); // overallocated
-//     cudaMalloc((void **) &d_out, sizeof(int));
-
-//     // transfer the input array to the GPU
-//     cudaMemcpy(d_in, h_in, ARRAY_BYTES, cudaMemcpyHostToDevice);
-
-//     cudaEvent_t start, stop;
-//     cudaEventCreate(&start);
-//     cudaEventCreate(&stop);
-//     // launch the kernel
-
-//     printf("Running test reduce\n");
-//     cudaEventRecord(start, 0);
-//     for (int i = 0; i < 1/* todo uncomment after testing is done 100 */; i++)
-//     {
-//         test_reduce(d_out, d_intermediate, d_in, ARRAY_SIZE);
-//     }
-//     cudaEventRecord(stop, 0);
-
-//     cudaEventSynchronize(stop);
-//     float elapsedTime;
-//     cudaEventElapsedTime(&elapsedTime, start, stop);
-//     elapsedTime /= 100.0f;      // 100 trials
-
-//     // copy back the sum from GPU
-//     int h_out;
-//     cudaMemcpy(&h_out, d_out, sizeof(int), cudaMemcpyDeviceToHost);
-
-//     printf("average time elapsed: %f\n", elapsedTime);
-
-//     printf("\nResults:\n");
-//     printf("\tserial sum: %i\n", sum);
-//     printf("\treduce sum: %i\n", h_out);
-
-//     // free GPU memory allocation
-//     cudaFree(d_in);
-//     cudaFree(d_intermediate);
-//     cudaFree(d_out);
-
-//     return 0;
-// }
 
 int main(int argc, char **argv)
 {
